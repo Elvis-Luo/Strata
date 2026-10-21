@@ -1,0 +1,335 @@
+--- a/metal/src/engine/window.cpp
++++ b/metal/src/engine/window.cpp
+@@ -17,6 +17,7 @@
+ #include "ref_quant.h"
+ #include "arena_budget.h"
+ #include "stream.h"
++#include "prompt_tiles.h"
+ #include "../../tests/coop_probe.h"
+ 
+ #include "strata/core/layer.hpp"
+@@ -104,6 +105,8 @@
+         kcur, vcur, iqr, ikr, qcur, qcurh, qidx, scores, qids, part, XQ, xqh, logits, ids, wts, bcnt, boff, eoff, tiles, meta,
+         stok, sw, pos, XS, HS, YE, yr, gsh, ush, hh, ys, sgv, WD, WU, Wqkv, Wz, Wal, Wbe, Wout, Wq, Wk, Wv, Wiq, Wik, Wr,
+         Wsg, Wshg, Wshu, Wshd, pemb, pembh, pkey, pval, keyn, qn, gated, normW, Wpk, Wpv;
++    // Buffer has no releasing destructor: track allocations so workspace growth can free them.
++    std::vector<mtl::Buffer> owned;
+ };
+ 
+ // The vision path (--vision, GENI requests), from the shared host code: the image rows of the prompt being read
+@@ -2008,11 +2011,9 @@
+ int pg_unit(int t) { return t == ref::Q2_0 || t == ref::IQ3_S || t == ref::BF16 || t == ref::F32 ? 16 : 32; }
+ // the v2 (M4) expert tiles: the K-quants need TK 128, Q8_0 / IQ4_XS TK 32 (their 32-value units), the rest TK 16
+ std::string gu2_tile(int t) {
+-    if (t == ref::Q4_K || t == ref::Q5_K || t == ref::Q6_K) return "_16_16_128_2";   // the M4's best (513fc615)
+-    if (t == ref::Q8_0 || t == ref::IQ4_XS) return "_16_64_32_2";
+-    return "_16_64_16_2";
+-}
+-std::string dn2_tile(int t) { return t == ref::IQ4_NL || t == ref::Q5_1 || t == ref::Q8_0 ? "_16_64_32_2" : "_16_64_16_2"; }
++    return strata_metal::prompt_gu_v2_tile(t).suffix();
++}
++std::string dn2_tile(int t) { return strata_metal::prompt_down_v2_tile(t).suffix(); }
+ }  // namespace
+ 
+ struct Window::PromptGemm {
+@@ -2130,8 +2131,7 @@
+ 
+ bool Window::prompt_chunk(const int32_t* tokens, int Tn, int64_t pos0, std::string& err) {
+     PromptGemm& p = *pg_;
+-    p.meta.as<uint32_t>()[2] = p.gu_v3 ? NFF / (32 * 4) : NFF / 64;
+-    p.meta.as<uint32_t>()[5] = p.dn_v3 ? N / (64 * 2) : N / 64;
++    // mm_scan writes the layer-specific grid; quantization and tiles can differ between layers.
+     auto TN = [this](const std::string& n) -> const gguf::Tensor& { return this->T(n); };
+     if (Tn < 1 || Tn > p.MT) { err = "metal prompt: chunk size out of range"; return false; }
+     if (pos0 + Tn + 1 >= max_cells_) { err = "metal prompt: the chunk runs past the context"; return false; }
+@@ -2328,7 +2328,11 @@
+         const uint32_t nclr = (uint32_t) p.maxrows;
+         D(PP(p.lib, "mm_clear"), {mtl::Arg::B(p.stok), mtl::Arg::V(nclr)}, (p.maxrows + 255) / 256, 1, 256);
+         D(PP(p.lib, "mm_hist"), {mtl::Arg::B(p.ids), mtl::Arg::B(p.bcnt), mtl::Arg::V(pa)}, nblk, 1, 1024);
+-        D(PP(p.lib, "mm_scan"), {mtl::Arg::B(p.bcnt), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff), mtl::Arg::B(p.tiles),
++        const uint32_t gx_gu = p.gu_v3 ? NFF / (32 * 4) : strata_metal::prompt_gu_v2_tile(eg.type).grid_columns(NFF);
++        const uint32_t gx_dn = p.dn_v3 ? N / (64 * 2) : strata_metal::prompt_down_v2_tile(ed.type).grid_columns(N);
++        D(PP(p.lib, "mm_scan", mtl::Constants().u(25, gx_gu).u(26, gx_dn),
++             "mm_scan#" + std::to_string(gx_gu) + ":" + std::to_string(gx_dn)),
++          {mtl::Arg::B(p.bcnt), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff), mtl::Arg::B(p.tiles),
+                                  mtl::Arg::B(p.meta), mtl::Arg::V(pa)}, 1, 1, NEXP);
+         D(PP(p.lib, "mm_place"), {mtl::Arg::B(p.ids), mtl::Arg::B(p.wts), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff),
+                                   mtl::Arg::B(p.stok), mtl::Arg::B(p.sw), mtl::Arg::B(p.pos), mtl::Arg::V(pa)}, nblk, 1, 1024);
+--- a/metal/src/engine/prompt_chain.inc
++++ b/metal/src/engine/prompt_chain.inc
+@@ -57,14 +57,26 @@
+         b.lqsa = cx_->compile({"qsa.metal", "qsa_prompt.metal"}, "#define NO_GGML_COMMON 1\n");
+         b.k4 = coop_k4();
+     }
++    // pc_chunk's GPU submissions complete synchronously. No dispatch retains these scratch buffers
++    // across calls; replacing their raw handles without free leaked every smaller workspace.
++    size_t released = 0;
++    for (auto& buffer : b.owned) {
++        released += buffer.bytes;
++        cx_->free(buffer);
++    }
+     b = PromptBufs{b.lib, b.lgdn, b.lqsa, b.k4};   // (re)allocated below for the larger chunk
+     b.C = C;
+     const size_t MT = (size_t) C;
+     const int MB = (int) max_cells_ / 4 + 2;
+     b.maxrows = (int) MT * TOPK + NEXP * PC_TM;
+     const int nblk_max = ((int) MT * TOPK + 1023) / 1024;
+-    auto F32 = [&](size_t n) { return cx_->alloc(4 * n); };
+-    auto F16 = [&](size_t n) { return cx_->alloc(2 * n); };
++    auto alloc = [&](size_t bytes) {
++        mtl::Buffer buffer = cx_->alloc(bytes);
++        b.owned.push_back(buffer);
++        return buffer;
++    };
++    auto F32 = [&](size_t n) { return alloc(4 * n); };
++    auto F16 = [&](size_t n) { return alloc(2 * n); };
+     b.R = F32(MT * HC * N); b.bo = F32(MT * N); b.inj[0] = F32(MT * HC); b.inj[1] = F32(MT * HC); b.xn = F32(MT * HC * N);
+     b.xnh = F16(MT * HC * N); b.V = F32(MT * (LR + HC)); b.loh = F16(MT * LR); b.mixed = F32(MT * N); b.mixh = F16(MT * N);
+     b.qkv = F32(MT * 10240); b.z = F32(MT * 6144); b.al = F32(MT * 48); b.be = F32(MT * 48); b.yg = F32(MT * 6144);
+@@ -72,12 +84,12 @@
+     b.ggb = F32(MT * 48 * 2); b.gkq = F32(MT * 16); b.go = F32(MT * 6144);
+     b.qfull = F32(MT * 12288); b.kcur = F32(MT * 512); b.vcur = F32(MT * 512); b.iqr = F32(MT * 512); b.ikr = F32(MT * 128);
+     b.qcur = F32(MT * 24 * 256); b.qcurh = F16(MT * 24 * 256); b.qidx = F32(MT * 4 * 128); b.scores = F32(MT * MB);
+-    b.qids = cx_->alloc(4 * MT * PC_QB); b.part = F32(MT * PC_QCHUNKS * 24 * 258); b.XQ = F32(4 * MT * 6144 + MT * 384);
++    b.qids = alloc(4 * MT * PC_QB); b.part = F32(MT * PC_QCHUNKS * 24 * 258); b.XQ = F32(4 * MT * 6144 + MT * 384);
+     b.xqh = F16(MT * 6144);
+-    b.logits = F32(MT * NEXP); b.ids = cx_->alloc(4 * MT * TOPK); b.wts = F32(MT * TOPK);
+-    b.bcnt = cx_->alloc(4 * (size_t) nblk_max * NEXP); b.boff = cx_->alloc(4 * (size_t) nblk_max * NEXP);
+-    b.eoff = cx_->alloc(4 * NEXP); b.tiles = cx_->alloc(8 * (size_t) (b.maxrows / PC_TM + 1)); b.meta = cx_->alloc(64);
+-    b.stok = cx_->alloc(4 * (size_t) b.maxrows); b.sw = F32(b.maxrows); b.pos = cx_->alloc(4 * MT * TOPK);
++    b.logits = F32(MT * NEXP); b.ids = alloc(4 * MT * TOPK); b.wts = F32(MT * TOPK);
++    b.bcnt = alloc(4 * (size_t) nblk_max * NEXP); b.boff = alloc(4 * (size_t) nblk_max * NEXP);
++    b.eoff = alloc(4 * NEXP); b.tiles = alloc(8 * (size_t) (b.maxrows / PC_TM + 1)); b.meta = alloc(64);
++    b.stok = alloc(4 * (size_t) b.maxrows); b.sw = F32(b.maxrows); b.pos = alloc(4 * MT * TOPK);
+     b.XS = F16((size_t) b.maxrows * N); b.HS = F16((size_t) b.maxrows * NFF); b.YE = F32((size_t) b.maxrows * N);
+     b.yr = F32(MT * N); b.gsh = F32(MT * NFF); b.ush = F32(MT * NFF); b.hh = F16(MT * NFF); b.ys = F32(MT * N); b.sgv = F32(MT);
+     b.WD = F16((size_t) (LR + HC) * HC * N); b.WU = F16((size_t) HC * N * LR); b.Wqkv = F16((size_t) 10240 * N);
+@@ -93,11 +105,12 @@
+     // else v2
+     b.gu3[0] = 16; b.gu3[1] = 32; b.gu3[2] = 32; b.gu3[3] = 4;
+     b.dn3[0] = 16; b.dn3[1] = 64; b.dn3[2] = 32; b.dn3[3] = 2;
+-    b.meta.as<uint32_t>()[2] = b.k4 ? NFF / (b.gu3[1] * b.gu3[3]) : NFF / 64;
+-    b.meta.as<uint32_t>()[5] = b.k4 ? N / (b.dn3[1] * b.dn3[3]) : N / 64;
+-    std::fprintf(stderr, "strata metal: prompt kernels (mac-kern's prompt chain) for chunks of %d rows, %s, ready in %.0f ms\n",
++    // mm_scan specializes the indirect grid to each layer's selected expert tile.
++    size_t workspace_bytes = 0;
++    for (const auto& buffer : b.owned) workspace_bytes += buffer.bytes;
++    std::fprintf(stderr, "strata metal: prompt kernels (mac-kern's prompt chain) for chunks of %d rows, %s, ready in %.0f ms; workspace %.1f MiB, released %.1f MiB\n",
+                  C, b.k4 ? "matrix-unit register operands (COOP_K4)" : "the older expert / attention kernels (no M5 layout)",
+-                 now_ms() - t0);
++                 now_ms() - t0, workspace_bytes / 1048576.0, released / 1048576.0);
+     return true;
+ }
+ 
+@@ -280,7 +293,11 @@
+         const uint32_t nclr = (uint32_t) b.maxrows;
+         D(P_(b.lib, "mm_clear"), {mtl::Arg::B(b.stok), mtl::Arg::V(nclr)}, (b.maxrows + 255) / 256, 1, 256);
+         D(P_(b.lib, "mm_hist"), {mtl::Arg::B(b.ids), mtl::Arg::B(b.bcnt), mtl::Arg::V(pa)}, nblk, 1, 1024);
+-        D(P_(b.lib, "mm_scan"), {mtl::Arg::B(b.bcnt), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.tiles), mtl::Arg::B(b.meta),
++        const uint32_t gx_gu = b.k4 ? NFF / (b.gu3[1] * b.gu3[3]) : strata_metal::prompt_gu_v2_tile(eg.type).grid_columns(NFF);
++        const uint32_t gx_dn = b.k4 ? N / (b.dn3[1] * b.dn3[3]) : strata_metal::prompt_down_v2_tile(ed.type).grid_columns(N);
++        D(P_(b.lib, "mm_scan", mtl::Constants().u(25, gx_gu).u(26, gx_dn),
++             "mm_scan#" + std::to_string(gx_gu) + ":" + std::to_string(gx_dn)),
++          {mtl::Arg::B(b.bcnt), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.tiles), mtl::Arg::B(b.meta),
+                                 mtl::Arg::V(pa)}, 1, 1, NEXP);
+         D(P_(b.lib, "mm_place"), {mtl::Arg::B(b.ids), mtl::Arg::B(b.wts), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.stok),
+                                  mtl::Arg::B(b.sw), mtl::Arg::B(b.pos), mtl::Arg::V(pa)}, nblk, 1, 1024);
+--- /dev/null
++++ b/metal/src/engine/prompt_tiles.h
+@@ -0,0 +1,27 @@
++#pragma once
++#include "ref_quant.h"
++#include <cstdint>
++#include <string>
++
++namespace strata_metal {
++struct PromptTile {
++    int rows, columns, reduction, simdgroups;
++    std::string suffix() const {
++        return "_" + std::to_string(rows) + "_" + std::to_string(columns) + "_" +
++               std::to_string(reduction) + "_" + std::to_string(simdgroups);
++    }
++    uint32_t grid_columns(int outputs) const {
++        return (outputs + columns - 1) / columns;
++    }
++};
++
++// Keep the selected kernel and its indirect grid derived from the same tile.
++inline PromptTile prompt_gu_v2_tile(int type) {
++    if (type == ref::Q4_K || type == ref::Q5_K || type == ref::Q6_K) return {16, 16, 128, 2};
++    if (type == ref::Q8_0 || type == ref::IQ4_XS) return {16, 64, 32, 2};
++    return {16, 64, 16, 2};
++}
++inline PromptTile prompt_down_v2_tile(int type) {
++    return {16, 64, type == ref::IQ4_NL || type == ref::Q5_1 || type == ref::Q8_0 ? 32 : 16, 2};
++}
++}  // namespace strata_metal
+--- a/metal/kernels/moe_mm.metal
++++ b/metal/kernels/moe_mm.metal
+@@ -27,6 +27,13 @@
+     uint n_blocks;   // ceil(n_ent / 1024)
+ };
+ 
++// Optional per-layer grid dimensions. Older callers still supply meta[2] and meta[5].
++// A host write during graph construction would leave every layer using the final layer's tile.
++constant uint MM_GX_GU [[function_constant(25)]];
++constant uint MM_GX_DOWN [[function_constant(26)]];
++constant uint mm_gx_gu = is_function_constant_defined(MM_GX_GU) ? MM_GX_GU : 0;
++constant uint mm_gx_down = is_function_constant_defined(MM_GX_DOWN) ? MM_GX_DOWN : 0;
++
+ // counts per block: bcnt[block * n_expert + e]
+ kernel void mm_hist(device const int* ids [[buffer(0)]], device uint* bcnt [[buffer(1)]],
+                     constant MmPlanArgs& a [[buffer(2)]],
+@@ -44,7 +51,8 @@
+ // one threadgroup of n_expert (<= 1024) threads.  boff[block][e] = expert e's rows before this block (within e);
+ // eoff[e] = expert e's first padded row; tiles[i] = (expert, row0); meta[0] = n_tiles, meta[1] = padded rows;
+ // indirect grids: meta[2..4] = (gx_gu, n_tiles, 1) for the gate/up GEMM, meta[5..7] = (gx_down, n_tiles, 1) for the
+-// down GEMM (gx_gu in meta[2], gx_down in meta[5] written by the host once), meta[8..10] = (rows, 1, 1) for mm_gather.
++// down GEMM (gx_gu in meta[2], gx_down in meta[5], optionally specialized per layer),
++// meta[8..10] = (rows, 1, 1) for mm_gather. Unspecified grid constants keep caller values.
+ kernel void mm_scan(device const uint* bcnt [[buffer(0)]], device uint* boff [[buffer(1)]],
+                     device uint* eoff [[buffer(2)]], device int2* tiles [[buffer(3)]], device uint* meta [[buffer(4)]],
+                     constant MmPlanArgs& a [[buffer(5)]],
+@@ -77,6 +85,8 @@
+         for (uint k = 0; k < nt; ++k) tiles[t0 + k] = int2(int(e), int(r0 + k * a.tm));
+     }
+     if (tid == 0) {
++        if (mm_gx_gu) meta[2] = mm_gx_gu;
++        if (mm_gx_down) meta[5] = mm_gx_down;
+         meta[0] = all_tiles;
+         meta[1] = all_rows;
+         meta[3] = all_tiles;   // indirect grid of the gate/up GEMM: (meta[2] given, tiles, 1)
+--- a/metal/tests/moe_mm_parity.cpp
++++ b/metal/tests/moe_mm_parity.cpp
+@@ -7,6 +7,7 @@
+ #include "coop_probe.h"
+ #include "mtl_rt.h"
+ #include "ref_quant.h"
++#include "engine/prompt_tiles.h"
+ 
+ #include <algorithm>
+ #include <cmath>
+@@ -33,9 +34,15 @@
+ int main(int argc, char** argv) {
+     int gu = ref::Q2_0, dn = ref::Q2_0, T = 256, TM = 16, TN = 64, TK = 64, SG = 2, DTN = -1, DTK = -1, DSG = -1;
+     bool bench = false, v2 = false, v3 = false, v4 = false, v5 = false;
++    bool engine_grid = false, legacy_grid = false;
+     int MS = 1;
+     for (int i = 1; i < argc; ++i) {
+         std::string a = argv[i];
++        if (a == "--engine-grid" || a == "--legacy-engine-grid") {
++            engine_grid = v2 = true;
++            legacy_grid = a == "--legacy-engine-grid";
++            continue;
++        }
+         if (a == "--gu") gu = type_of(argv[++i]);
+         else if (a == "--dn") dn = type_of(argv[++i]);
+         else if (a == "--T") T = std::atoi(argv[++i]);
+@@ -48,6 +55,11 @@
+         else if (a == "--v5") { v2 = v3 = true; v5 = true; }   // mm_gu5 (weight blocks staged in threadgroup memory)
+     }
+     if (bench && T == 256) T = 2048;
++    if (engine_grid) {
++        const auto g = strata_metal::prompt_gu_v2_tile(gu), d = strata_metal::prompt_down_v2_tile(dn);
++        TM = g.rows; TN = g.columns; TK = g.reduction; SG = g.simdgroups;
++        DTN = d.columns; DTK = d.reduction; DSG = d.simdgroups;
++    }
+     if (v4) TM = 16 * MS;   // the plan's tile height; mm_gu4's name carries MS instead
+     mtl::Context cx;
+     const int lib = cx.compile({"quant.metal", "units.metal", "mma.metal", "moe_mm.metal"});
+@@ -87,7 +99,11 @@
+         }
+         for (int k = 0; k < TOPK; ++k) w.as<float>()[t * TOPK + k] /= s;
+     }
+-    mtl::Pipeline phist = cx.pipeline(lib, "mm_hist"), pscan = cx.pipeline(lib, "mm_scan"), pplace = cx.pipeline(lib, "mm_place"),
++    const auto scan_constants = engine_grid && !legacy_grid
++        ? mtl::Constants().u(25, strata_metal::prompt_gu_v2_tile(gu).grid_columns(N_FF))
++                          .u(26, strata_metal::prompt_down_v2_tile(dn).grid_columns(N_EMBD))
++        : mtl::Constants();
++    mtl::Pipeline phist = cx.pipeline(lib, "mm_hist"), pscan = cx.pipeline(lib, "mm_scan", scan_constants), pplace = cx.pipeline(lib, "mm_place"),
+                   pclear = cx.pipeline(lib, "mm_clear"), pcomb = cx.pipeline(lib, "mm_combine");
+     if (DTN < 0) { DTN = TN; DTK = TK; DSG = SG; }
+     if (dn == ref::IQ4_NL && DTK < 32) DTK = 32;
+@@ -112,7 +128,8 @@
+             const uint32_t nclr = maxrows;
+             mtl::Dispatch c; c.p = &pclear; c.args = {mtl::Arg::B(stok), mtl::Arg::V(nclr)}; c.grid[0] = (maxrows + 255) / 256; c.tg[0] = 256; ds.push_back(c);
+             mtl::Dispatch h; h.p = &phist; h.args = {mtl::Arg::B(ids), mtl::Arg::B(bcnt), mtl::Arg::V(pa)}; h.grid[0] = nblk; h.tg[0] = 1024; ds.push_back(h);
+-            meta.as<uint32_t>()[2] = N_FF / TN;
++            meta.as<uint32_t>()[2] = legacy_grid ? N_FF / 64 : engine_grid ? 1 : N_FF / TN;
++            meta.as<uint32_t>()[5] = legacy_grid ? N_EMBD / DTN : 1;
+             mtl::Dispatch sc; sc.p = &pscan; sc.args = {mtl::Arg::B(bcnt), mtl::Arg::B(boff), mtl::Arg::B(eoff), mtl::Arg::B(tiles), mtl::Arg::B(meta), mtl::Arg::V(pa)}; sc.tg[0] = NE; ds.push_back(sc);
+             mtl::Dispatch pl; pl.p = &pplace; pl.args = {mtl::Arg::B(ids), mtl::Arg::B(w), mtl::Arg::B(boff), mtl::Arg::B(eoff), mtl::Arg::B(stok), mtl::Arg::B(sw), mtl::Arg::B(pos), mtl::Arg::V(pa)}; pl.grid[0] = nblk; pl.tg[0] = 1024; ds.push_back(pl);
+         }
+@@ -128,8 +145,10 @@
+             if (v2 || v3) g.args = {mtl::Arg::B(W), mtl::Arg::B(XS), mtl::Arg::B(HS), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
+             else g.args = {mtl::Arg::B(W), mtl::Arg::B(x), mtl::Arg::B(H), mtl::Arg::B(stok), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
+             g.grid[0] = N_FF / (v3 ? TN * SG : TN); g.grid[1] = meta.as<uint32_t>()[0]; g.tg[0] = 32 * SG; ds.push_back(g);
++            if (engine_grid) { ds.back().indirect = &meta; ds.back().ind_off = 2 * sizeof(uint32_t); }
+             mtl::Dispatch d; d.p = &pdn; d.args = {mtl::Arg::B(W), mtl::Arg::B(v2 || v3 ? HS : H), mtl::Arg::B(YE), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
+             d.grid[0] = N_EMBD / (v3 ? DTN * DSG : v2 ? DTN : TN); d.grid[1] = meta.as<uint32_t>()[0]; d.tg[0] = 32 * ((v2 || v3) ? DSG : SG); ds.push_back(d);
++            if (engine_grid) { ds.back().indirect = &meta; ds.back().ind_off = 5 * sizeof(uint32_t); }
+             const uint32_t ca[4] = {(uint32_t)T, N_EMBD, TOPK, 0};
+             mtl::Dispatch cb; cb.p = &pcomb; cb.args = {mtl::Arg::B(YE), mtl::Arg::B(pos), mtl::Arg::B(sw), mtl::Arg::B(y), mtl::Arg::V(ca)};
+             cb.grid[0] = (T * N_EMBD + 255) / 256; cb.tg[0] = 256; ds.push_back(cb);
+--- /dev/null
++++ b/metal/tests/prompt_grid_parity.cpp
+@@ -0,0 +1,59 @@
++// Verify mixed-format layers update indirect grids on the GPU, within one command graph.
++#include "mtl_rt.h"
++#include "engine/prompt_tiles.h"
++#include <cstdio>
++#include <cstring>
++#include <vector>
++
++int main() {
++    mtl::Context cx;
++    const int lib = cx.compile({"quant.metal", "units.metal", "mma.metal", "moe_mm.metal"}, R"(
++#include <metal_stdlib>
++using namespace metal;
++kernel void capture_grid(device const uint* meta [[buffer(0)]], device uint* out [[buffer(1)]],
++                         constant uint& slot [[buffer(2)]], uint i [[thread_position_in_grid]]) {
++    if (i < 11) out[slot * 11 + i] = meta[i];
++}
++)");
++    struct Plan { uint32_t entries, topk, experts, tm, blocks; } plan{32, 1, 32, 16, 1};
++    auto counts = cx.alloc(32*4), offsets = cx.alloc(32*4), eoff = cx.alloc(32*4);
++    auto tiles = cx.alloc(32*8), meta = cx.alloc(64), out = cx.alloc(4*11*4);
++    for (int i=0; i<32; ++i) counts.as<uint32_t>()[i]=1;
++    std::memset(meta.as<uint8_t>(), 0, 64);
++    const uint32_t wide = strata_metal::prompt_gu_v2_tile(ref::Q8_0).grid_columns(640);
++    const uint32_t narrow = strata_metal::prompt_gu_v2_tile(ref::Q4_K).grid_columns(640);
++    if (wide != 10 || narrow != 40) return 1;
++    std::vector<mtl::Pipeline> scans;
++    scans.reserve(4);
++    scans.push_back(cx.pipeline(lib,"mm_scan",mtl::Constants().u(25,narrow).u(26,40)));
++    scans.push_back(cx.pipeline(lib,"mm_scan",mtl::Constants().u(25,wide).u(26,20)));
++    scans.push_back(cx.pipeline(lib,"mm_scan",mtl::Constants().u(25,narrow).u(26,40)));
++    // A legacy caller with no function constants must keep caller-supplied grid values.
++    scans.push_back(cx.pipeline(lib,"mm_scan"));
++    auto capture = cx.pipeline(lib,"capture_grid");
++    std::vector<mtl::Dispatch> ds;
++    for (uint32_t slot=0;slot<4;++slot) {
++        mtl::Dispatch sc;
++        sc.p=&scans[slot];
++        sc.args={mtl::Arg::B(counts),mtl::Arg::B(offsets),mtl::Arg::B(eoff),
++                 mtl::Arg::B(tiles),mtl::Arg::B(meta),mtl::Arg::V(plan)};
++        sc.tg[0]=32;
++        ds.push_back(sc);
++        mtl::Dispatch cp;
++        cp.p=&capture;
++        cp.args={mtl::Arg::B(meta),mtl::Arg::B(out),mtl::Arg::V(slot)};
++        cp.tg[0]=32;
++        ds.push_back(cp);
++    }
++    cx.run(ds);
++    bool ok=true;
++    for(int i=0;i<4;++i) {
++        auto row=out.as<uint32_t>()+11*i;
++        bool pass=row[2]==(i==1?wide:narrow) && row[5]==(i==1?20u:40u)
++            && row[0]==32 && row[1]==512 && row[3]==32 && row[4]==1
++            && row[6]==32 && row[7]==1 && row[8]==512 && row[9]==1 && row[10]==1;
++        std::printf("mixed layer %d: gate/up grid %u, down grid %u: %s\n",i,row[2],row[5],pass?"PASS":"FAIL");
++        ok &= pass;
++    }
++    return ok?0:1;
++}

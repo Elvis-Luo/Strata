@@ -1,0 +1,877 @@
+{
+  "provenance": "Historical combined local patch on a7bdbfdabc9a3e7c83e3dbc2441d0933569d773e; not PR #2903 validation",
+  "cases": [
+    {
+      "id": "3-images-forward",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png"
+      ],
+      "expected": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847"
+        ]
+      }
+    },
+    {
+      "id": "4-images-forward",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-04.png"
+      ],
+      "expected": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259"
+        ]
+      }
+    },
+    {
+      "id": "4-images-reverse",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-04.png",
+        "fixtures/card-03.png",
+        "fixtures/card-02.png",
+        "fixtures/card-01.png"
+      ],
+      "expected": {
+        "codes": [
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      }
+    },
+    {
+      "id": "6-images-forward",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-04.png",
+        "fixtures/card-05.png",
+        "fixtures/card-06.png"
+      ],
+      "expected": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604"
+        ]
+      }
+    },
+    {
+      "id": "8-images-forward",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-04.png",
+        "fixtures/card-05.png",
+        "fixtures/card-06.png",
+        "fixtures/card-07.png",
+        "fixtures/card-08.png"
+      ],
+      "expected": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604",
+          "P2915",
+          "C7483"
+        ]
+      }
+    },
+    {
+      "id": "8-images-reverse",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-08.png",
+        "fixtures/card-07.png",
+        "fixtures/card-06.png",
+        "fixtures/card-05.png",
+        "fixtures/card-04.png",
+        "fixtures/card-03.png",
+        "fixtures/card-02.png",
+        "fixtures/card-01.png"
+      ],
+      "expected": {
+        "codes": [
+          "C7483",
+          "P2915",
+          "M8604",
+          "H4372",
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      }
+    },
+    {
+      "id": "12-images-forward",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-04.png",
+        "fixtures/card-05.png",
+        "fixtures/card-06.png",
+        "fixtures/card-07.png",
+        "fixtures/card-08.png",
+        "fixtures/card-09.png",
+        "fixtures/card-10.png",
+        "fixtures/card-11.png",
+        "fixtures/card-12.png"
+      ],
+      "expected": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604",
+          "P2915",
+          "C7483",
+          "D3608",
+          "F9152",
+          "A6824",
+          "N5037"
+        ]
+      }
+    },
+    {
+      "id": "12-images-reverse",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-12.png",
+        "fixtures/card-11.png",
+        "fixtures/card-10.png",
+        "fixtures/card-09.png",
+        "fixtures/card-08.png",
+        "fixtures/card-07.png",
+        "fixtures/card-06.png",
+        "fixtures/card-05.png",
+        "fixtures/card-04.png",
+        "fixtures/card-03.png",
+        "fixtures/card-02.png",
+        "fixtures/card-01.png"
+      ],
+      "expected": {
+        "codes": [
+          "N5037",
+          "A6824",
+          "F9152",
+          "D3608",
+          "C7483",
+          "P2915",
+          "M8604",
+          "H4372",
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      }
+    },
+    {
+      "id": "6-images-shuffle-repeat",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-06.png",
+        "fixtures/card-02.png",
+        "fixtures/card-04.png",
+        "fixtures/card-02.png",
+        "fixtures/card-01.png",
+        "fixtures/card-06.png"
+      ],
+      "expected": {
+        "codes": [
+          "M8604",
+          "K9036",
+          "B6259",
+          "K9036",
+          "R5728",
+          "M8604"
+        ]
+      }
+    },
+    {
+      "id": "8-images-labelled",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-08.png",
+        "fixtures/card-03.png",
+        "fixtures/card-06.png",
+        "fixtures/card-01.png",
+        "fixtures/card-07.png",
+        "fixtures/card-02.png",
+        "fixtures/card-05.png",
+        "fixtures/card-04.png"
+      ],
+      "expected": {
+        "codes": [
+          "C7483",
+          "T1847",
+          "M8604",
+          "R5728",
+          "P2915",
+          "K9036",
+          "H4372",
+          "B6259"
+        ]
+      },
+      "position": "interleaved",
+      "ids": true
+    },
+    {
+      "id": "4-images-question-last",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-04.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-01.png"
+      ],
+      "expected": {
+        "codes": [
+          "B6259",
+          "K9036",
+          "T1847",
+          "R5728"
+        ]
+      },
+      "position": "after"
+    },
+    {
+      "id": "4-images-color-counts",
+      "files": [
+        "fixtures/card-01.png",
+        "fixtures/card-02.png",
+        "fixtures/card-03.png",
+        "fixtures/card-04.png"
+      ],
+      "system": "Return one JSON object with field images, an array in attachment order. Each item has code (string), color (red, blue, or green), and circles (integer).",
+      "prompt": "For each image, read its card code, identify the circles color and count the circles.",
+      "expected": {
+        "images": [
+          {
+            "code": "R5728",
+            "color": "red",
+            "circles": 1
+          },
+          {
+            "code": "K9036",
+            "color": "blue",
+            "circles": 2
+          },
+          {
+            "code": "T1847",
+            "color": "green",
+            "circles": 3
+          },
+          {
+            "code": "B6259",
+            "color": "red",
+            "circles": 4
+          }
+        ]
+      }
+    },
+    {
+      "id": "history-start",
+      "system": "Answer the current question using the attached images. Return one JSON object with the fields requested in that question.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions. Return a codes array of strings.",
+      "files": [
+        "fixtures/card-05.png",
+        "fixtures/card-03.png",
+        "fixtures/card-01.png",
+        "fixtures/card-07.png"
+      ],
+      "expected": {
+        "codes": [
+          "H4372",
+          "T1847",
+          "R5728",
+          "P2915"
+        ]
+      }
+    },
+    {
+      "id": "history-no-new-images",
+      "history": "history-start",
+      "files": [],
+      "prompt": "Now return only the FIRST and LAST card codes from the images in my previous message, in that order. Use the same codes JSON field.",
+      "expected": {
+        "codes": [
+          "H4372",
+          "P2915"
+        ]
+      }
+    },
+    {
+      "id": "history-add-3-images",
+      "history": "history-no-new-images",
+      "files": [
+        "fixtures/card-02.png",
+        "fixtures/card-08.png",
+        "fixtures/card-04.png"
+      ],
+      "prompt": "Three NEW images are attached. Return one codes array containing ALL seven original and new card codes in chronological image-attachment order.",
+      "expected": {
+        "codes": [
+          "H4372",
+          "T1847",
+          "R5728",
+          "P2915",
+          "K9036",
+          "C7483",
+          "B6259"
+        ]
+      }
+    },
+    {
+      "id": "history-revisit-first-image-detail",
+      "history": "history-add-3-images",
+      "files": [],
+      "prompt": "Look at the FIRST image from my FIRST message, not the latest images. Return JSON with its code, color (red, blue or green), and circles (integer).",
+      "expected": {
+        "code": "H4372",
+        "color": "blue",
+        "circles": 1
+      }
+    },
+    {
+      "id": "post-history-new-session",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-12.png",
+        "fixtures/card-02.png",
+        "fixtures/card-10.png",
+        "fixtures/card-03.png",
+        "fixtures/card-09.png",
+        "fixtures/card-04.png"
+      ],
+      "expected": {
+        "codes": [
+          "N5037",
+          "K9036",
+          "F9152",
+          "T1847",
+          "D3608",
+          "B6259"
+        ]
+      }
+    },
+    {
+      "id": "post-history-cache-repeat",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-12.png",
+        "fixtures/card-02.png",
+        "fixtures/card-10.png",
+        "fixtures/card-03.png",
+        "fixtures/card-09.png",
+        "fixtures/card-04.png"
+      ],
+      "expected": {
+        "codes": [
+          "N5037",
+          "K9036",
+          "F9152",
+          "T1847",
+          "D3608",
+          "B6259"
+        ]
+      }
+    },
+    {
+      "id": "4-images-tool-call",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-06.png",
+        "fixtures/card-04.png",
+        "fixtures/card-02.png",
+        "fixtures/card-08.png"
+      ],
+      "expected": {
+        "codes": [
+          "M8604",
+          "B6259",
+          "K9036",
+          "C7483"
+        ]
+      },
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "record_cards",
+            "description": "Record the card codes from images in attachment order.",
+            "parameters": {
+              "type": "object",
+              "properties": {
+                "codes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "codes"
+              ],
+              "additionalProperties": false
+            }
+          }
+        }
+      ],
+      "tool_choice": {
+        "type": "function",
+        "function": {
+          "name": "record_cards"
+        }
+      },
+      "grader": "tool"
+    },
+    {
+      "id": "6-images-json-schema",
+      "system": "Return exactly one JSON object with one field codes: an array of strings in image order. No other keys or explanation.",
+      "prompt": "Read CARD CODE from EVERY image, preserving the order the images are attached. Include repetitions.",
+      "files": [
+        "fixtures/card-09.png",
+        "fixtures/card-02.png",
+        "fixtures/card-10.png",
+        "fixtures/card-01.png",
+        "fixtures/card-11.png",
+        "fixtures/card-03.png"
+      ],
+      "expected": {
+        "codes": [
+          "D3608",
+          "K9036",
+          "F9152",
+          "R5728",
+          "A6824",
+          "T1847"
+        ]
+      },
+      "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+          "name": "cards",
+          "strict": true,
+          "schema": {
+            "type": "object",
+            "properties": {
+              "codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "codes"
+            ],
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  ],
+  "results": [
+    {
+      "id": "3-images-forward",
+      "image_count": 3,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"R5728\",\n    \"K9036\",\n    \"T1847\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "4-images-forward",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"R5728\",\n    \"K9036\",\n    \"T1847\",\n    \"B6259\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "4-images-reverse",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"B6259\",\n    \"T1847\",\n    \"K9036\",\n    \"R5728\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "6-images-forward",
+      "image_count": 6,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"R5728\",\n    \"K9036\",\n    \"T1847\",\n    \"B6259\",\n    \"H4372\",\n    \"M8604\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "8-images-forward",
+      "image_count": 8,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604",
+          "P2915",
+          "C7483"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"R5728\",\n    \"K9036\",\n    \"T1847\",\n    \"B6259\",\n    \"H4372\",\n    \"M8604\",\n    \"P2915\",\n    \"C7483\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "8-images-reverse",
+      "image_count": 8,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "C7483",
+          "P2915",
+          "M8604",
+          "H4372",
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"C7483\",\n    \"P2915\",\n    \"M8604\",\n    \"H4372\",\n    \"B6259\",\n    \"T1847\",\n    \"K9036\",\n    \"R5728\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "12-images-forward",
+      "image_count": 12,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "R5728",
+          "K9036",
+          "T1847",
+          "B6259",
+          "H4372",
+          "M8604",
+          "P2915",
+          "C7483",
+          "D3608",
+          "F9152",
+          "A6824",
+          "N5037"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"R5728\",\n    \"K9036\",\n    \"T1847\",\n    \"B6259\",\n    \"H4372\",\n    \"M8604\",\n    \"P2915\",\n    \"C7483\",\n    \"D3608\",\n    \"F9152\",\n    \"A6824\",\n    \"N5037\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "12-images-reverse",
+      "image_count": 12,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "N5037",
+          "A6824",
+          "F9152",
+          "D3608",
+          "C7483",
+          "P2915",
+          "M8604",
+          "H4372",
+          "B6259",
+          "T1847",
+          "K9036",
+          "R5728"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"N5037\",\n    \"A6824\",\n    \"F9152\",\n    \"D3608\",\n    \"C7483\",\n    \"P2915\",\n    \"M8604\",\n    \"H4372\",\n    \"B6259\",\n    \"T1847\",\n    \"K9036\",\n    \"R5728\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "6-images-shuffle-repeat",
+      "image_count": 6,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "M8604",
+          "K9036",
+          "B6259",
+          "K9036",
+          "R5728",
+          "M8604"
+        ]
+      },
+      "text": "```json\n{\"codes\": [\"M8604\", \"K9036\", \"B6259\", \"K9036\", \"R5728\", \"M8604\"]}\n```",
+      "tools": []
+    },
+    {
+      "id": "8-images-labelled",
+      "image_count": 8,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "C7483",
+          "T1847",
+          "M8604",
+          "R5728",
+          "P2915",
+          "K9036",
+          "H4372",
+          "B6259"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"C7483\",\n    \"T1847\",\n    \"M8604\",\n    \"R5728\",\n    \"P2915\",\n    \"K9036\",\n    \"H4372\",\n    \"B6259\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "4-images-question-last",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "B6259",
+          "K9036",
+          "T1847",
+          "R5728"
+        ]
+      },
+      "text": "```json\n{\"codes\": [\"B6259\", \"K9036\", \"T1847\", \"R5728\"]}\n```",
+      "tools": []
+    },
+    {
+      "id": "4-images-color-counts",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "images": [
+          {
+            "code": "R5728",
+            "color": "red",
+            "circles": 1
+          },
+          {
+            "code": "K9036",
+            "color": "blue",
+            "circles": 2
+          },
+          {
+            "code": "T1847",
+            "color": "green",
+            "circles": 3
+          },
+          {
+            "code": "B6259",
+            "color": "red",
+            "circles": 4
+          }
+        ]
+      },
+      "text": "```json\n{\n  \"images\": [\n    {\n      \"code\": \"R5728\",\n      \"color\": \"red\",\n      \"circles\": 1\n    },\n    {\n      \"code\": \"K9036\",\n      \"color\": \"blue\",\n      \"circles\": 2\n    },\n    {\n      \"code\": \"T1847\",\n      \"color\": \"green\",\n      \"circles\": 3\n    },\n    {\n      \"code\": \"B6259\",\n      \"color\": \"red\",\n      \"circles\": 4\n    }\n  ]\n}\n```",
+      "tools": []
+    },
+    {
+      "id": "history-start",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "H4372",
+          "T1847",
+          "R5728",
+          "P2915"
+        ]
+      },
+      "text": "```json\n{\"codes\": [\"H4372\", \"T1847\", \"R5728\", \"P2915\"]}\n```",
+      "tools": []
+    },
+    {
+      "id": "history-no-new-images",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "H4372",
+          "P2915"
+        ]
+      },
+      "text": "```json\n{\"codes\": [\"H4372\", \"P2915\"]}\n```",
+      "tools": []
+    },
+    {
+      "id": "history-add-3-images",
+      "image_count": 7,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "H4372",
+          "T1847",
+          "R5728",
+          "P2915",
+          "K9036",
+          "C7483",
+          "B6259"
+        ]
+      },
+      "text": "```json\n{\"codes\": [\"H4372\", \"T1847\", \"R5728\", \"P2915\", \"K9036\", \"C7483\", \"B6259\"]}\n```",
+      "tools": []
+    },
+    {
+      "id": "history-revisit-first-image-detail",
+      "image_count": 7,
+      "passed": true,
+      "parsed": {
+        "code": "H4372",
+        "color": "blue",
+        "circles": 1
+      },
+      "text": "```json\n{\"code\": \"H4372\", \"color\": \"blue\", \"circles\": 1}\n```",
+      "tools": []
+    },
+    {
+      "id": "post-history-new-session",
+      "image_count": 6,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "N5037",
+          "K9036",
+          "F9152",
+          "T1847",
+          "D3608",
+          "B6259"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"N5037\",\n    \"K9036\",\n    \"F9152\",\n    \"T1847\",\n    \"D3608\",\n    \"B6259\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "post-history-cache-repeat",
+      "image_count": 6,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "N5037",
+          "K9036",
+          "F9152",
+          "T1847",
+          "D3608",
+          "B6259"
+        ]
+      },
+      "text": "{\n  \"codes\": [\n    \"N5037\",\n    \"K9036\",\n    \"F9152\",\n    \"T1847\",\n    \"D3608\",\n    \"B6259\"\n  ]\n}",
+      "tools": []
+    },
+    {
+      "id": "4-images-tool-call",
+      "image_count": 4,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "M8604",
+          "B6259",
+          "K9036",
+          "C7483"
+        ]
+      },
+      "text": "",
+      "tools": [
+        {
+          "name": "record_cards",
+          "arguments": "{\"codes\":[\"M8604\", \"B6259\", \"K9036\", \"C7483\"]}"
+        }
+      ],
+      "history_saved": false
+    },
+    {
+      "id": "6-images-json-schema",
+      "image_count": 6,
+      "passed": true,
+      "parsed": {
+        "codes": [
+          "D3608",
+          "K9036",
+          "F9152",
+          "R5728",
+          "A6824",
+          "T1847"
+        ]
+      },
+      "text": "{\"codes\":[\"D3608\",\"K9036\",\"F9152\",\"R5728\",\"A6824\",\"T1847\"]}",
+      "tools": []
+    }
+  ]
+}
