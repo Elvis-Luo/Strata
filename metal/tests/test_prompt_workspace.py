@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Exercise the production pc_setup allocation code on Metal without a model.
+"""Exercise production pc_setup allocations on Metal without loading a model.
 
-Window otherwise requires an initialized model/session. Extract its buffer struct,
-geometry constants and complete pc_setup method into a small allocation-only shim.
-No allocation/free statements are reimplemented by the test. Link the real mtl_rt and
-use weak Objective-C references to check every old MTLBuffer is deallocated.
-This is a resource-lifetime test, not a model or prompt-kernel correctness test.
+Extract the actual buffer declaration, geometry and complete allocation method into
+a Window shim; use the real Metal allocator. By default allocations and frees run
+without a caller-provided autorelease pool, as on the engine's worker threads.
+Observer-only pools never surround those allocations.
 
-CTest supplies --runtime. --source-ref <base> can test the unpatched source with the
-same harness/library; it should fail when the first workspace grows.
+--drain-allocation-pools is an explicit ownership-only diagnostic. It hides missing
+allocator pools and must not be used as evidence of end-to-end memory reclamation.
+--source-ref selects another source revision without replacing the linked runtime.
 """
 
 import argparse
@@ -28,7 +28,8 @@ def main():
     parser.add_argument("--cxx", required=True)
     parser.add_argument("--runtime", type=pathlib.Path, required=True)
     parser.add_argument("--build-dir", type=pathlib.Path, required=True)
-    parser.add_argument("--source-ref", help="git revision for the negative control")
+    parser.add_argument("--source-ref", help="source revision for a negative control")
+    parser.add_argument("--drain-allocation-pools", action="store_true")
     args = parser.parse_args()
     root = pathlib.Path(__file__).resolve().parents[2]
 
@@ -46,8 +47,7 @@ def main():
     constants = section(chain, "constexpr int PC_QB", "struct PcDqArgs")
     setup = section(chain, "bool Window::pc_setup(int C)", "// one chunk of nT rows")
 
-    # Enumerate the actual Buffer members, including arrays. This also checks
-    # newly added buffers without depending on the fix's ownership vector.
+    # Enumerate actual members, independently of the fix's ownership vector.
     declaration = re.search(r"mtl::Buffer\s+([^;]+);", buffers)
     if declaration is None:
         raise RuntimeError("PromptBufs no longer has the expected buffer declaration")
@@ -61,12 +61,13 @@ def main():
             names.extend(f"{name}[{i}]" for i in range(int(count)))
         else:
             names.append(name)
-    references = ", ".join("&w.pb_." + name for name in names)
 
     harness = r'''
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 #include "mtl_rt.h"
+#include "gguf_lite.h"
+#include <mach/mach.h>
 #include <array>
 #include <chrono>
 #include <cstdio>
@@ -84,20 +85,106 @@ struct Window {
     mtl::Context* cx_;
     PromptBufs pb_;
     int64_t max_cells_ = 131200;
-    // The allocation lifetime does not depend on the M4/M5 kernel layout probe.
-    bool coop_k4() { return false; }
+    bool had_on_ = false;
+    bool layout_k4 = false;
+    gguf::Tensor gate;
+    // Metadata-only fixtures; no M5 kernels or Gyro model are executed.
+    bool coop_k4() { return layout_k4; }
+    const gguf::Tensor& T(const std::string&) const { return gate; }
     bool pc_setup(int C);
 };
 @SETUP@
 
 bool setup(Window& w, int capacity) {
-    // Drain framework temporaries before observing the retained buffer handles.
-    @autoreleasepool { return w.pc_setup(capacity); }
+    if (@DRAIN@) {
+        @autoreleasepool { return w.pc_setup(capacity); }
+    }
+    return w.pc_setup(capacity);
 }
 
 bool require(bool ok, const char* what) {
     std::printf("%s: %s\n", ok ? "PASS" : "FAIL", what);
     return ok;
+}
+
+double footprint_mib() {
+    task_vm_info_data_t info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&info, &count) != KERN_SUCCESS)
+        return -1;
+    return info.phys_footprint / 1048576.0;
+}
+
+bool scenario(mtl::Context& cx, bool had, bool k4, int type) {
+    Window w{&cx};
+    w.had_on_ = had;
+    w.layout_k4 = k4;
+    w.gate.type = type;
+    std::array<mtl::Buffer*, @COUNT@> all{@REFERENCES@};
+    if (!setup(w, 64)) return false;
+    std::vector<mtl::Buffer*> buffers;
+    bool allocated = true;
+    for (auto* buffer : all) {
+        @OPTIONAL_MIXR@
+        allocated = allocated && buffer->handle != nullptr;
+        buffers.push_back(buffer);
+    }
+    if (!require(allocated, "every required workspace member allocated")) return false;
+    std::printf("fixture had=%d k4=%d type=%d; %zu live prompt buffers; footprint %.1f MiB\n",
+                had, k4, type, buffers.size(), footprint_mib());
+    const std::array<int, 3> libraries{w.pb_.lib, w.pb_.lgdn, w.pb_.lqsa};
+    for (int capacity : {96, 128, 192}) {
+        __weak id<MTLBuffer> previous[@COUNT@] = {};
+        const int old_capacity = w.pb_.C;
+        @autoreleasepool {
+            std::set<void*> handles;
+            bool distinct = true;
+            for (size_t i = 0; i < buffers.size(); ++i) {
+                distinct = distinct && handles.insert(buffers[i]->handle).second;
+                previous[i] = (__bridge id<MTLBuffer>)buffers[i]->handle;
+            }
+            if (!require(distinct, "every buffer handle is distinct")) return false;
+        }  // Observer temporaries only; allocations happened before this pool.
+        w.pb_.R.as<float>()[0] = 123.0f;
+        const uint64_t allocations = cx.allocated();
+        if (!setup(w, old_capacity) || !setup(w, old_capacity / 2)) return false;
+        bool same = cx.allocated() == allocations && w.pb_.C == old_capacity &&
+                    w.pb_.R.as<float>()[0] == 123.0f;
+        @autoreleasepool {
+            for (size_t i = 0; i < buffers.size(); ++i)
+                same = same && (__bridge void*)previous[i] == buffers[i]->handle;
+        }
+        if (!require(same, "same/smaller request reuses every buffer and contents")) return false;
+
+        // No caller pool here in the default test: the runtime must own its cleanup.
+        if (!setup(w, capacity)) return false;
+        size_t retained = 0;
+        @autoreleasepool {
+            for (size_t i = 0; i < buffers.size(); ++i) retained += previous[i] != nil;
+        }
+        std::printf("capacity %d -> %d: old buffers retained = %zu of %zu; footprint %.1f MiB\n",
+                    old_capacity, capacity, retained, buffers.size(), footprint_mib());
+        if (!require(retained == 0, "growth deallocates every old Metal buffer")) return false;
+        if (!require(w.pb_.C == capacity && libraries ==
+                     std::array<int, 3>{w.pb_.lib, w.pb_.lgdn, w.pb_.lqsa},
+                     "growth preserves libraries and capacity")) return false;
+        @LAYOUT_CHECK@
+        bool usable = true;
+        for (auto* b : buffers) usable = usable && b->handle && b->ptr && b->bytes;
+        if (!require(usable, "replacement buffers remain usable")) return false;
+        for (auto* b : buffers) b->as<uint32_t>()[0] = 17;
+    }
+    __weak id<MTLBuffer> last[@COUNT@] = {};
+    @autoreleasepool {
+        for (size_t i = 0; i < buffers.size(); ++i) last[i] = (__bridge id<MTLBuffer>)buffers[i]->handle;
+    }
+    for (auto* b : buffers) cx.free(*b);
+    bool freed = true;
+    @autoreleasepool {
+        for (size_t i = 0; i < buffers.size(); ++i) freed = freed && last[i] == nil;
+    }
+    std::printf("after final free: footprint %.1f MiB\n", footprint_mib());
+    return require(freed, "final workspace deallocated without a caller pool");
 }
 
 int main() {
@@ -106,63 +193,29 @@ int main() {
             std::puts("SKIP: no Metal device available");
             return 77;
         }
-        mtl::Context cx;
-        std::printf("device: %s; %d prompt buffers; no model loaded\n",
-                    cx.device_name().c_str(), @COUNT@);
-        Window w{&cx};
-        std::array<mtl::Buffer*, @COUNT@> buffers{@REFERENCES@};
-        if (!setup(w, 64)) return 1;
-        const std::array<int, 3> libraries{w.pb_.lib, w.pb_.lgdn, w.pb_.lqsa};
-        for (int capacity : {96, 128, 192}) {
-            NSPointerArray* previous;
-            const int old_capacity = w.pb_.C;
-            @autoreleasepool {
-                previous = [NSPointerArray weakObjectsPointerArray];
-                std::set<void*> handles;
-                bool distinct = true;
-                for (const auto* b : buffers) {
-                    distinct = distinct && b->handle && handles.insert(b->handle).second;
-                    [previous addPointer:b->handle];
-                }
-                if (!require(distinct, "every workspace member has a distinct live buffer")) return 1;
-                w.pb_.R.as<float>()[0] = 123.0f;
-                const uint64_t allocations = cx.allocated();
-                if (!setup(w, old_capacity) || !setup(w, old_capacity / 2)) return 1;
-                bool same = cx.allocated() == allocations && w.pb_.C == old_capacity &&
-                            w.pb_.R.as<float>()[0] == 123.0f;
-                // Reading a weak slot can temporarily retain/autorelease its referent.
-                // End those observation references before testing deallocation.
-                for (size_t i = 0; i < buffers.size(); ++i)
-                    same = same && [previous pointerAtIndex:i] == buffers[i]->handle;
-                if (!require(same, "same/smaller request reuses every buffer and its contents")) return 1;
-            }  // Drain references made while growing/reading the weak pointer array.
-
-            if (!setup(w, capacity)) return 1;
-            size_t retained = 0;
-            for (NSUInteger i = 0; i < previous.count; ++i)
-                retained += [previous pointerAtIndex:i] != nullptr;
-            std::printf("capacity %d -> %d: old buffers retained = %zu of %zu\n",
-                        old_capacity, capacity, retained, buffers.size());
-            if (!require(retained == 0, "growth releases all old Metal buffers")) return 1;
-            if (!require(w.pb_.C == capacity && libraries ==
-                         std::array<int, 3>{w.pb_.lib, w.pb_.lgdn, w.pb_.lqsa},
-                         "growth keeps the compiled libraries and new capacity")) return 1;
-            bool usable = true;
-            for (auto* b : buffers) usable = usable && b->handle && b->ptr && b->bytes;
-            if (!require(usable, "all replacement buffers are usable")) return 1;
-            for (auto* b : buffers) b->as<uint32_t>()[0] = 17;
-        }
-        // Only scratch allocation is exercised; no model, KV state or forward pass.
-        for (auto* b : buffers) cx.free(*b);
-        std::puts("prompt workspace lifetime: PASS");
     }
+    mtl::Context cx;
+    std::printf("device: %s; no model loaded; allocation-pool diagnostic=%d\n",
+                cx.device_name().c_str(), @DRAIN@);
+    if (!scenario(cx, false, false, 0) || !scenario(cx, true, false, 144) ||
+        !scenario(cx, false, true, 0) || !scenario(cx, true, true, 144)) return 1;
+    std::puts("prompt workspace lifetime: PASS");
 }
 '''
-    for marker, value in {
+    layout_check = ""
+    if "bool v3e" in buffers:
+        layout_check = ('if (!require(w.pb_.v3e == (k4 && type < 144), '
+                        '"growth preserves expert-layout selection")) return false;')
+    replacements = {
         "@GEOMETRY@": geometry, "@CONSTANTS@": constants,
         "@BUFFERS@": buffers, "@SETUP@": setup,
-        "@COUNT@": str(len(names)), "@REFERENCES@": references,
-    }.items():
+        "@COUNT@": str(len(names)),
+        "@REFERENCES@": ", ".join("&w.pb_." + name for name in names),
+        "@DRAIN@": "true" if args.drain_allocation_pools else "false",
+        "@OPTIONAL_MIXR@": "if (!had && buffer == &w.pb_.mixr) continue;" if "mixr" in names else "",
+        "@LAYOUT_CHECK@": layout_check,
+    }
+    for marker, value in replacements.items():
         harness = harness.replace(marker, value)
     args.build_dir.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="lifetime-", dir=args.build_dir) as tmp:
