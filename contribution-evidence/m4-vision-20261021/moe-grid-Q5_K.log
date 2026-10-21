@@ -1,0 +1,3 @@
+device Apple M4 Max; Q5_K/Q5_1, T 4, 64 experts, tile TM 16 TN 16 TK 128 SG 2
+plan: 31 tiles of 16, 496 padded rows for 40 entries
+parity: plan ok; y vs fp16-operand reference rel L2 1.18e-05, vs exact float reference 2.94e-04  PASS
