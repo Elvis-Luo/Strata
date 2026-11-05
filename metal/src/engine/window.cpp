@@ -15,6 +15,7 @@
 #include "mtl_rt.h"
 #include "resource_path.h"
 #include "ref_quant.h"
+#include "prompt_tiles.h"
 #include "arena_budget.h"
 #include "stream.h"
 #include "../../tests/coop_probe.h"
@@ -2665,12 +2666,8 @@ struct PgPlan { uint32_t n_ent, topk, n_expert, tm, n_blocks; };
 struct PgMm { uint64_t gate_off, up_off, down_off, gu_stride, d_stride; uint32_t gu_row, d_row, n_embd, n_ff; };
 int pg_unit(int t) { return t == ref::Q2_0 || t == ref::IQ3_S || t == ref::BF16 || t == ref::F32 ? 16 : 32; }
 // the v2 (M4) expert tiles: the K-quants need TK 128, Q8_0 / IQ4_XS TK 32 (their 32-value units), the rest TK 16
-std::string gu2_tile(int t) {
-    if (t == ref::Q4_K || t == ref::Q5_K || t == ref::Q6_K) return "_16_16_128_2";   // the M4's best (513fc615)
-    if (t == ref::Q8_0 || t == ref::IQ4_XS) return "_16_64_32_2";
-    return "_16_64_16_2";
-}
-std::string dn2_tile(int t) { return t == ref::IQ4_NL || t == ref::Q5_1 || t == ref::Q8_0 ? "_16_64_32_2" : "_16_64_16_2"; }
+std::string gu2_tile(int t) { return strata_metal::prompt_gu_v2_tile(t).suffix(); }
+std::string dn2_tile(int t) { return strata_metal::prompt_down_v2_tile(t).suffix(); }
 }  // namespace
 
 struct Window::PromptGemm {
@@ -2791,8 +2788,7 @@ bool Window::prompt_gemm_init(std::string& err) {
 
 bool Window::prompt_chunk(const int32_t* tokens, int Tn, int64_t pos0, std::string& err) {
     PromptGemm& p = *pg_;
-    p.meta.as<uint32_t>()[2] = p.gu_v3 ? NFF / (32 * 4) : NFF / 64;
-    p.meta.as<uint32_t>()[5] = p.dn_v3 ? N / (64 * 2) : N / 64;
+    // mm_scan writes the layer-specific grid: quantization and tiles can differ between layers.
     auto TN = [this](const std::string& n) -> const gguf::Tensor& { return this->T(n); };
     if (Tn < 1 || Tn > p.MT) { err = "metal prompt: chunk size out of range"; return false; }
     if (pos0 + Tn + 1 >= max_cells_) { err = "metal prompt: the chunk runs past the context"; return false; }
@@ -2989,7 +2985,11 @@ bool Window::prompt_chunk(const int32_t* tokens, int Tn, int64_t pos0, std::stri
         const uint32_t nclr = (uint32_t) p.maxrows;
         D(PP(p.lib, "mm_clear"), {mtl::Arg::B(p.stok), mtl::Arg::V(nclr)}, (p.maxrows + 255) / 256, 1, 256);
         D(PP(p.lib, "mm_hist"), {mtl::Arg::B(p.ids), mtl::Arg::B(p.bcnt), mtl::Arg::V(pa)}, nblk, 1, 1024);
-        D(PP(p.lib, "mm_scan"), {mtl::Arg::B(p.bcnt), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff), mtl::Arg::B(p.tiles),
+        const uint32_t gx_gu = p.gu_v3 ? NFF / (32 * 4) : strata_metal::prompt_gu_v2_tile(eg.type).grid_columns(NFF);
+        const uint32_t gx_dn = p.dn_v3 ? N / (64 * 2) : strata_metal::prompt_down_v2_tile(ed.type).grid_columns(N);
+        D(PP(p.lib, "mm_scan", mtl::Constants().u(27, gx_gu).u(28, gx_dn),
+             "mm_scan#" + std::to_string(gx_gu) + ":" + std::to_string(gx_dn)),
+          {mtl::Arg::B(p.bcnt), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff), mtl::Arg::B(p.tiles),
                                  mtl::Arg::B(p.meta), mtl::Arg::V(pa)}, 1, 1, nexp_);
         D(PP(p.lib, "mm_place"), {mtl::Arg::B(p.ids), mtl::Arg::B(p.wts), mtl::Arg::B(p.boff), mtl::Arg::B(p.eoff),
                                   mtl::Arg::B(p.stok), mtl::Arg::B(p.sw), mtl::Arg::B(p.pos), mtl::Arg::V(pa)}, nblk, 1, 1024);

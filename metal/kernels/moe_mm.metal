@@ -27,6 +27,13 @@ struct MmPlanArgs {
     uint n_blocks;   // ceil(n_ent / 1024)
 };
 
+// Optional per-layer grid dimensions. Older callers still supply meta[2] and meta[5].
+// A host write during graph construction would leave every layer using the final layer's tile.
+constant uint MM_GX_GU [[function_constant(27)]];
+constant uint MM_GX_DOWN [[function_constant(28)]];
+constant uint mm_gx_gu = is_function_constant_defined(MM_GX_GU) ? MM_GX_GU : 0;
+constant uint mm_gx_down = is_function_constant_defined(MM_GX_DOWN) ? MM_GX_DOWN : 0;
+
 // counts per block: bcnt[block * n_expert + e]
 kernel void mm_hist(device const int* ids [[buffer(0)]], device uint* bcnt [[buffer(1)]],
                     constant MmPlanArgs& a [[buffer(2)]],
@@ -44,7 +51,8 @@ kernel void mm_hist(device const int* ids [[buffer(0)]], device uint* bcnt [[buf
 // one threadgroup of n_expert (<= 1024) threads.  boff[block][e] = expert e's rows before this block (within e);
 // eoff[e] = expert e's first padded row; tiles[i] = (expert, row0); meta[0] = n_tiles, meta[1] = padded rows;
 // indirect grids: meta[2..4] = (gx_gu, n_tiles, 1) for the gate/up GEMM, meta[5..7] = (gx_down, n_tiles, 1) for the
-// down GEMM (gx_gu in meta[2], gx_down in meta[5] written by the host once), meta[8..10] = (rows, 1, 1) for mm_gather.
+// down GEMM (gx_gu in meta[2], gx_down in meta[5], optionally specialized per layer),
+// meta[8..10] = (rows, 1, 1) for mm_gather. Unspecified grid constants keep caller values.
 kernel void mm_scan(device const uint* bcnt [[buffer(0)]], device uint* boff [[buffer(1)]],
                     device uint* eoff [[buffer(2)]], device int2* tiles [[buffer(3)]], device uint* meta [[buffer(4)]],
                     constant MmPlanArgs& a [[buffer(5)]],
@@ -77,6 +85,8 @@ kernel void mm_scan(device const uint* bcnt [[buffer(0)]], device uint* boff [[b
         for (uint k = 0; k < nt; ++k) tiles[t0 + k] = int2(int(e), int(r0 + k * a.tm));
     }
     if (tid == 0) {
+        if (mm_gx_gu) meta[2] = mm_gx_gu;
+        if (mm_gx_down) meta[5] = mm_gx_down;
         meta[0] = all_tiles;
         meta[1] = all_rows;
         meta[3] = all_tiles;   // indirect grid of the gate/up GEMM: (meta[2] given, tiles, 1)

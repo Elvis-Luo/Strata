@@ -7,6 +7,7 @@
 #include "coop_probe.h"
 #include "mtl_rt.h"
 #include "ref_quant.h"
+#include "engine/prompt_tiles.h"
 
 #include <algorithm>
 #include <cmath>
@@ -33,9 +34,15 @@ float h16(float v) { return ref::f16_to_f32(ref::f32_to_f16(v)); }
 int main(int argc, char** argv) {
     int gu = ref::Q2_0, dn = ref::Q2_0, T = 256, TM = 16, TN = 64, TK = 64, SG = 2, DTN = -1, DTK = -1, DSG = -1;
     bool bench = false, v2 = false, v3 = false, v4 = false, v5 = false;
+    bool engine_grid = false, legacy_grid = false;
     int MS = 1;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
+        if (a == "--engine-grid" || a == "--legacy-engine-grid") {
+            engine_grid = v2 = true;
+            legacy_grid = a == "--legacy-engine-grid";
+            continue;
+        }
         if (a == "--gu") gu = type_of(argv[++i]);
         else if (a == "--dn") dn = type_of(argv[++i]);
         else if (a == "--T") T = std::atoi(argv[++i]);
@@ -48,6 +55,11 @@ int main(int argc, char** argv) {
         else if (a == "--v5") { v2 = v3 = true; v5 = true; }   // mm_gu5 (weight blocks staged in threadgroup memory)
     }
     if (bench && T == 256) T = 2048;
+    if (engine_grid) {
+        const auto g = strata_metal::prompt_gu_v2_tile(gu), d = strata_metal::prompt_down_v2_tile(dn);
+        TM = g.rows; TN = g.columns; TK = g.reduction; SG = g.simdgroups;
+        DTN = d.columns; DTK = d.reduction; DSG = d.simdgroups;
+    }
     if (v4) TM = 16 * MS;   // the plan's tile height; mm_gu4's name carries MS instead
     mtl::Context cx;
     const int lib = cx.compile({"quant.metal", "units.metal", "mma.metal", "moe_mm.metal"});
@@ -87,7 +99,11 @@ int main(int argc, char** argv) {
         }
         for (int k = 0; k < TOPK; ++k) w.as<float>()[t * TOPK + k] /= s;
     }
-    mtl::Pipeline phist = cx.pipeline(lib, "mm_hist"), pscan = cx.pipeline(lib, "mm_scan"), pplace = cx.pipeline(lib, "mm_place"),
+    const auto scan_constants = engine_grid && !legacy_grid
+        ? mtl::Constants().u(27, strata_metal::prompt_gu_v2_tile(gu).grid_columns(N_FF))
+                          .u(28, strata_metal::prompt_down_v2_tile(dn).grid_columns(N_EMBD))
+        : mtl::Constants();
+    mtl::Pipeline phist = cx.pipeline(lib, "mm_hist"), pscan = cx.pipeline(lib, "mm_scan", scan_constants), pplace = cx.pipeline(lib, "mm_place"),
                   pclear = cx.pipeline(lib, "mm_clear"), pcomb = cx.pipeline(lib, "mm_combine");
     if (DTN < 0) { DTN = TN; DTK = TK; DSG = SG; }
     if (dn == ref::IQ4_NL && DTK < 32) DTK = 32;
@@ -112,7 +128,8 @@ int main(int argc, char** argv) {
             const uint32_t nclr = maxrows;
             mtl::Dispatch c; c.p = &pclear; c.args = {mtl::Arg::B(stok), mtl::Arg::V(nclr)}; c.grid[0] = (maxrows + 255) / 256; c.tg[0] = 256; ds.push_back(c);
             mtl::Dispatch h; h.p = &phist; h.args = {mtl::Arg::B(ids), mtl::Arg::B(bcnt), mtl::Arg::V(pa)}; h.grid[0] = nblk; h.tg[0] = 1024; ds.push_back(h);
-            meta.as<uint32_t>()[2] = N_FF / TN;
+            meta.as<uint32_t>()[2] = legacy_grid ? N_FF / 64 : engine_grid ? 1 : N_FF / TN;
+            meta.as<uint32_t>()[5] = legacy_grid ? N_EMBD / DTN : 1;
             mtl::Dispatch sc; sc.p = &pscan; sc.args = {mtl::Arg::B(bcnt), mtl::Arg::B(boff), mtl::Arg::B(eoff), mtl::Arg::B(tiles), mtl::Arg::B(meta), mtl::Arg::V(pa)}; sc.tg[0] = NE; ds.push_back(sc);
             mtl::Dispatch pl; pl.p = &pplace; pl.args = {mtl::Arg::B(ids), mtl::Arg::B(w), mtl::Arg::B(boff), mtl::Arg::B(eoff), mtl::Arg::B(stok), mtl::Arg::B(sw), mtl::Arg::B(pos), mtl::Arg::V(pa)}; pl.grid[0] = nblk; pl.tg[0] = 1024; ds.push_back(pl);
         }
@@ -128,8 +145,10 @@ int main(int argc, char** argv) {
             if (v2 || v3) g.args = {mtl::Arg::B(W), mtl::Arg::B(XS), mtl::Arg::B(HS), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
             else g.args = {mtl::Arg::B(W), mtl::Arg::B(x), mtl::Arg::B(H), mtl::Arg::B(stok), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
             g.grid[0] = N_FF / (v3 ? TN * SG : TN); g.grid[1] = meta.as<uint32_t>()[0]; g.tg[0] = 32 * SG; ds.push_back(g);
+            if (engine_grid) { ds.back().indirect = &meta; ds.back().ind_off = 2 * sizeof(uint32_t); }
             mtl::Dispatch d; d.p = &pdn; d.args = {mtl::Arg::B(W), mtl::Arg::B(v2 || v3 ? HS : H), mtl::Arg::B(YE), mtl::Arg::B(tiles), mtl::Arg::V(ma)};
             d.grid[0] = N_EMBD / (v3 ? DTN * DSG : v2 ? DTN : TN); d.grid[1] = meta.as<uint32_t>()[0]; d.tg[0] = 32 * ((v2 || v3) ? DSG : SG); ds.push_back(d);
+            if (engine_grid) { ds.back().indirect = &meta; ds.back().ind_off = 5 * sizeof(uint32_t); }
             const uint32_t ca[4] = {(uint32_t)T, N_EMBD, TOPK, 0};
             mtl::Dispatch cb; cb.p = &pcomb; cb.args = {mtl::Arg::B(YE), mtl::Arg::B(pos), mtl::Arg::B(sw), mtl::Arg::B(y), mtl::Arg::V(ca)};
             cb.grid[0] = (T * N_EMBD + 255) / 256; cb.tg[0] = 256; ds.push_back(cb);

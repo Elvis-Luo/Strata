@@ -108,8 +108,7 @@ bool Window::pc_setup(int C) {
     // else v2
     b.gu3[0] = 16; b.gu3[1] = 32; b.gu3[2] = 32; b.gu3[3] = 4;
     b.dn3[0] = 16; b.dn3[1] = 64; b.dn3[2] = 32; b.dn3[3] = 2;
-    b.meta.as<uint32_t>()[2] = b.v3e ? NFF / (b.gu3[1] * b.gu3[3]) : NFF / 64;
-    b.meta.as<uint32_t>()[5] = b.v3e ? N / (b.dn3[1] * b.dn3[3]) : N / 64;
+    // mm_scan writes the indirect grid for each layer's selected expert tile.
     std::fprintf(stderr, "strata metal: prompt kernels (mac-kern's prompt chain) for chunks of %d rows, %s, ready in %.0f ms\n",
                  C, b.k4 ? "matrix-unit register operands (COOP_K4)" : "the older expert / attention kernels (no M5 layout)",
                  now_ms() - t0);
@@ -317,7 +316,11 @@ bool Window::pc_chunk(const int64_t* tokens, int nT, int64_t pos0, std::string& 
         const uint32_t nclr = (uint32_t) b.maxrows;
         D(P_(b.lib, "mm_clear"), {mtl::Arg::B(b.stok), mtl::Arg::V(nclr)}, (b.maxrows + 255) / 256, 1, 256);
         D(P_(b.lib, "mm_hist"), {mtl::Arg::B(b.ids), mtl::Arg::B(b.bcnt), mtl::Arg::V(pa)}, nblk, 1, 1024);
-        D(P_(b.lib, "mm_scan"), {mtl::Arg::B(b.bcnt), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.tiles), mtl::Arg::B(b.meta),
+        const uint32_t gx_gu = b.v3e ? NFF / (b.gu3[1] * b.gu3[3]) : strata_metal::prompt_gu_v2_tile(eg.type).grid_columns(NFF);
+        const uint32_t gx_dn = b.v3e ? N / (b.dn3[1] * b.dn3[3]) : strata_metal::prompt_down_v2_tile(ed.type).grid_columns(N);
+        D(P_(b.lib, "mm_scan", mtl::Constants().u(27, gx_gu).u(28, gx_dn),
+             "mm_scan#" + std::to_string(gx_gu) + ":" + std::to_string(gx_dn)),
+          {mtl::Arg::B(b.bcnt), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.tiles), mtl::Arg::B(b.meta),
                                 mtl::Arg::V(pa)}, 1, 1, nexp_);
         D(P_(b.lib, "mm_place"), {mtl::Arg::B(b.ids), mtl::Arg::B(b.wts), mtl::Arg::B(b.boff), mtl::Arg::B(b.eoff), mtl::Arg::B(b.stok),
                                  mtl::Arg::B(b.sw), mtl::Arg::B(b.pos), mtl::Arg::V(pa)}, nblk, 1, 1024);
